@@ -1,0 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0c0a09;
+  --color-background-card: #1c1917;
+  --color-primary: #e3a659;
+  --color-primary-hover: #d19548;
+  --color-muted: #a8a29e;
+  
+  --font-sans: "Inter", "IBM Plex Sans Arabic", sans-serif;
+  --font-serif: "Playfair Display", "Cormorant Garamond", serif;
+  --breakpoint-xs: 400px;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-background text-white font-sans overflow-x-hidden;
+  direction: rtl;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-background;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-stone-800 rounded-full hover:bg-stone-700 transition-colors;
+}
+
+.glass-card {
+  @apply bg-background-card/80 backdrop-blur-md border border-white/5 rounded-2xl;
+}
+
+.primary-button {
+  @apply bg-primary hover:bg-primary-hover text-black font-semibold px-6 py-2.5 rounded-full transition-all active:scale-95;
+}
+
+.secondary-button {
+  @apply bg-white/5 hover:bg-white/10 text-white font-medium px-4 py-2 rounded-lg transition-all border border-white/10;
+}
+
+.badge-orange { @apply bg-orange-600/20 text-orange-400 border border-orange-600/30 px-2 py-0.5 rounded text-xs; }
+.badge-teal { @apply bg-teal-600/20 text-teal-400 border border-teal-600/30 px-2 py-0.5 rounded text-xs; }
+.badge-blue { @apply bg-blue-600/20 text-blue-400 border border-blue-600/30 px-2 py-0.5 rounded text-xs; }
+.badge-purple { @apply bg-purple-600/20 text-purple-400 border border-purple-600/30 px-2 py-0.5 rounded text-xs; }
