@@ -17,7 +17,10 @@ import {
   Layers,
   Sparkles,
   LayoutGrid,
-  Loader2
+  Loader2,
+  Brush,
+  Eraser,
+  Undo2
 } from 'lucide-react';
 
 const Editor = () => {
@@ -40,8 +43,13 @@ const Editor = () => {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
 
+  const [brushSize, setBrushSize] = useState(30);
+  const [isDrawing, setIsDrawing] = useState(false);
+  
   const canvasRef = useRef(null);
+  const maskCanvasRef = useRef(null);
   const imageRef = useRef(null);
+  const containerRef = useRef(null);
 
   // دالة لتصغير الصورة قبل إرسالها لـ Cloudflare لمنع تشوه الصور
   const compressAndResizeImage = (dataUrl, maxWidth = 768) => {
@@ -75,63 +83,120 @@ const Editor = () => {
     });
   };
 
+  // Helper function to convert any image (Base64 or Blob URL) to a clean Base64 string
+  const getBase64Image = (imgSrc) => {
+    return new Promise((resolve) => {
+      if (imgSrc.startsWith('data:')) {
+        resolve(imgSrc);
+        return;
+      }
+      const img = new Image();
+      img.crossOrigin = "Anonymous";
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        resolve(canvas.toDataURL('image/jpeg', 0.8));
+      };
+      img.src = imgSrc;
+    });
+  };
+
   const handleAIEdit = async () => {
-    if (!image || !aiPrompt.trim()) return;
+    if (!image) return;
     setAiLoading(true);
     setAiError(null);
 
     try {
-      // 1. تصغير الصورة لكي لا "تبوظ" النتيجة من الموديل
-      const processedImage = await compressAndResizeImage(image, 768);
+      if (activeTab === 'inpainting') {
+        if (!aiPrompt.trim()) throw new Error("يرجى وصف التعديل المطلوب (مثلاً: إضافة قبعة، تغيير الخلفية)");
+        
+        // 1. استخراج الماسك من الكانفاس (PNG أفضل للماسك ليكون حاداً)
+        const maskData = maskCanvasRef.current.toDataURL('image/png');
+        
+        // 2. تصغير الصورة الأصلية لـ 512x512 (شرط أساسي لـ Inpainting)
+        const optimizedImage = await compressAndResizeImage(image, 512);
 
-      // تحديد قوة التعديل حسب الستايل
-      let strength = 0.45; // الافتراضي: يحافظ على الصورة بنسبة 55%
-      let enhancedPrompt = aiPrompt;
-      
-      switch(aiStyle) {
-        case "Detail-Enhancer": strength = 0.25; enhancedPrompt += ", super detailed, 8k resolution, photorealistic, masterpiece, sharp focus"; break;
-        case "Photo-to-Anime": strength = 0.6; enhancedPrompt += ", anime style, studio ghibli, makoto shinkai, beautiful anime, highly detailed"; break;
-        case "Style-Shift": strength = 0.65; enhancedPrompt += ", artistic, digital art, masterpiece, high quality"; break;
-        case "Upscaler": strength = 0.15; enhancedPrompt += ", ultra high resolution, beautiful details, 8k"; break;
-        case "Soft-Glaze": strength = 0.35; enhancedPrompt += ", soft glowing light, ethereal, cinematic lighting"; break;
-        default: enhancedPrompt += ", extremely high quality, highly detailed";
-      }
+        // 3. إرسال للووركر
+        const response = await fetch("https://image-api.mina15g4y.workers.dev", {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer 12345678",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "inpainting",
+            prompt: aiPrompt,
+            image: optimizedImage,
+            mask: maskData
+          })
+        });
 
-      // 2. إرسال الصورة للـ ModelsLab API
-      const response = await fetch("https://modelslab.com/api/v6/images/img2img", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          key: "JsuqbKr1W9x9TCuK2e4ADjlNgztVZh02UrupTpEDcXTC5px878z4tQgbmck8",
-          prompt: enhancedPrompt,
-          negative_prompt: "bad quality, deformed, distorted, blurry",
-          init_image: processedImage, // يقبل Base64 Data URL مباشرة
-          width: 512,
-          height: 512,
-          samples: 1,
-          num_inference_steps: 21,
-          safety_checker: "no",
-          enhance_prompt: "yes",
-          guidance_scale: 7.5,
-          strength: strength
-        })
-      });
-
-      const responseData = await response.json();
-
-      if (responseData.status === "success" && responseData.output && responseData.output.length > 0) {
-        setImage(responseData.output[0]); // تعيين رابط الصورة المعدلة القادم من الـ API
-      } else if (responseData.status === "processing") {
-         throw new Error("يتم تجهيز الصورة في السيرفر حالياً.. حاول الضغط مرة أخرى بعد قليل!");
-      } else {
-         throw new Error("فشل التعديل حاول مرة أخرى: " + (responseData.message || ""));
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || "فشل السيرفر في معالجة طلب التعديل");
+        }
+        
+        const blob = await response.blob();
+        setImage(URL.createObjectURL(blob));
+        clearMask();
       }
     } catch (err) {
-      setAiError(err.message || "حدث خطأ غير متوقع");
-    } finally {
-      setAiLoading(false);
+      setAiError(err.message || "حدث خطأ");
+    }
+  };
+
+  const startDrawing = (e) => {
+    if (activeTab !== 'inpainting') return;
+    const canvas = maskCanvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext('2d');
+    
+    // Scale coordinates based on canvas size vs display size
+    const x = ((e.clientX || e.touches[0].clientX) - rect.left) * (canvas.width / rect.width);
+    const y = ((e.clientY || e.touches[0].clientY) - rect.top) * (canvas.height / rect.height);
+    
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    setIsDrawing(true);
+  };
+
+  const draw = (e) => {
+    if (!isDrawing || activeTab !== 'inpainting') return;
+    const canvas = maskCanvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext('2d');
+    
+    const x = ((e.clientX || e.touches[0].clientX) - rect.left) * (canvas.width / rect.width);
+    const y = ((e.clientY || e.touches[0].clientY) - rect.top) * (canvas.height / rect.height);
+    
+    ctx.lineTo(x, y);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = brushSize;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 1)'; // Solid white for mask
+    ctx.stroke();
+  };
+
+  const stopDrawing = () => {
+    setIsDrawing(false);
+  };
+
+  const clearMask = () => {
+    const canvas = maskCanvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  };
+
+  const handleImageLoad = () => {
+    // Sync mask canvas size with the image size
+    if (imageRef.current) {
+      maskCanvasRef.current.width = imageRef.current.naturalWidth;
+      maskCanvasRef.current.height = imageRef.current.naturalHeight;
     }
   };
 
@@ -236,14 +301,14 @@ const Editor = () => {
                     الفلاتر
                   </button>
                   <button 
-                    onClick={() => setActiveTab('ai_edit')}
-                    className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ${activeTab === 'ai_edit' ? 'bg-primary text-black' : 'text-muted hover:text-white'}`}
+                    onClick={() => setActiveTab('inpainting')}
+                    className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ${activeTab === 'inpainting' ? 'bg-primary text-black' : 'text-muted hover:text-white'}`}
                   >
-                    AI تعديل
+                    تعديل ذكي (AI)
                   </button>
                 </div>
 
-                {activeTab === 'filters' ? (
+                {activeTab === 'filters' && (
                   /* Filter Sliders */
                   <div className="space-y-5 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
                     {filterConfigs.map((cfg) => (
@@ -266,60 +331,53 @@ const Editor = () => {
                       </div>
                     ))}
                   </div>
-                ) : (
-                  /* AI Edit Section */
-                  <div className="space-y-3">
+                )}
+
+                {activeTab === 'inpainting' && (
+                  <div className="space-y-4">
                     <div className="p-3 bg-primary/10 border border-primary/20 rounded-xl">
-                      <p className="text-[10px] text-primary leading-relaxed text-right">استخدم الذكاء الاصطناعي لتحويل الصورة بأساليب مختلفة.</p>
+                      <p className="text-[10px] text-primary leading-relaxed text-right">قم بالرسم على المنطقة التي تريد تغييرها، ثم اكتب الوصف بالأسفل.</p>
                     </div>
-
-                    {/* Style Selector */}
+                    
                     <div>
-                      <label className="block text-[10px] text-muted mb-2 text-right">اختر الأسلوب</label>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {[
-                          { id: "Detail-Enhancer",  label: "تفاصيل أعلى", emoji: "🔍" },
-                          { id: "Photo-to-Anime",   label: "أنمي",        emoji: "🎌" },
-                          { id: "Style-Shift",      label: "تغيير الأسلوب",emoji: "🎨" },
-                          { id: "Vivid-Color",      label: "ألوان زاهية",  emoji: "🌈" },
-                          { id: "Upscaler",         label: "تكبير HD",     emoji: "📐" },
-                          { id: "Soft-Glaze",       label: "ناعم ومشرق",  emoji: "✨" },
-                          { id: "Light-Migration",  label: "إضاءة",       emoji: "💡" },
-                          { id: "Refiner",          label: "تحسين عام",   emoji: "⚙️" },
-                        ].map(style => (
-                          <button
-                            key={style.id}
-                            type="button"
-                            onClick={() => setAiStyle(style.id)}
-                            className={`p-2 rounded-lg text-[10px] font-bold transition-all border text-center ${
-                              aiStyle === style.id
-                                ? 'border-primary bg-primary/10 text-primary'
-                                : 'border-white/10 text-muted hover:border-white/20 hover:text-white'
-                            }`}
-                          >
-                            <div>{style.emoji}</div>
-                            <div>{style.label}</div>
-                          </button>
-                        ))}
-                      </div>
+                        <div className="flex justify-between items-center mb-2">
+                             <span className="text-[10px] text-primary">{brushSize}px</span>
+                             <label className="text-[10px] text-muted text-right">حجم الفرشاة</label>
+                        </div>
+                        <input 
+                            type="range"
+                            min="5"
+                            max="100"
+                            value={brushSize}
+                            onChange={(e) => setBrushSize(parseInt(e.target.value))}
+                            className="w-full appearance-none h-1 bg-white/10 rounded-lg accent-primary cursor-pointer mb-2"
+                        />
+                        <button 
+                            onClick={clearMask}
+                            className="w-full flex items-center justify-center gap-2 py-2 border border-white/10 rounded-lg text-white text-[10px] hover:bg-white/5"
+                        >
+                            <Undo2 size={12} />
+                            مسح الرسم الحالي
+                        </button>
                     </div>
 
                     <div>
-                      <label className="block text-[10px] text-muted mb-2 text-right">وصف التعديل (اختياري)</label>
+                      <label className="block text-[10px] text-muted mb-2 text-right">ماذا تريد أن تضع مكان الرسم؟</label>
                       <textarea 
                         value={aiPrompt}
                         onChange={(e) => setAiPrompt(e.target.value)}
-                        placeholder="مثال: غير الخلفية لغابة سحرية..."
-                        className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs text-white h-16 focus:border-primary focus:outline-none"
+                        placeholder="قميص أزرق، نظارات شمسية، غابة..."
+                        className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs text-white h-20 focus:border-primary focus:outline-none"
                       />
                     </div>
+                    
                     <button 
                       onClick={handleAIEdit}
                       disabled={aiLoading}
                       className="w-full primary-button py-3 text-xs flex items-center justify-center gap-2"
                     >
                       {aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles size={14} />}
-                      {aiLoading ? "جاري المعالجة..." : `تطبيق: ${aiStyle}`}
+                      {aiLoading ? "جاري التعديل..." : "تطبيق الرسم الذكي"}
                     </button>
                     {aiError && <p className="text-[10px] text-red-500 text-right">{aiError}</p>}
                   </div>
@@ -393,34 +451,53 @@ const Editor = () => {
                 animate={{ opacity: 1, scale: 1 }}
                 className="relative max-w-full"
               >
-                <img 
-                  ref={imageRef}
-                  src={image} 
-                  alt="Edit target"
-                  className="max-w-full max-h-[70vh] rounded-2xl shadow-2xl transition-all duration-200"
-                  style={{
-                    filter: `
-                      brightness(${filters.brightness}%)
-                      contrast(${filters.contrast}%)
-                      saturate(${filters.saturate}%)
-                      blur(${filters.blur}px)
-                      sepia(${filters.sepia}%)
-                      grayscale(${filters.grayscale}%)
-                      hue-rotate(${filters.hueRotate}deg)
-                      invert(${filters.invert}%)
-                      opacity(${filters.opacity}%)
-                    `
-                  }}
-                />
+                <div 
+                    ref={containerRef}
+                    className="relative cursor-crosshair touch-none"
+                    onMouseDown={startDrawing}
+                    onMouseMove={draw}
+                    onMouseUp={stopDrawing}
+                    onMouseLeave={stopDrawing}
+                    onTouchStart={startDrawing}
+                    onTouchMove={draw}
+                    onTouchEnd={stopDrawing}
+                >
+                    <img 
+                      ref={imageRef}
+                      src={image} 
+                      onLoad={handleImageLoad}
+                      alt="Edit target"
+                      className="max-w-full max-h-[70vh] rounded-2xl shadow-2xl transition-all duration-200 select-none pointer-events-none"
+                      style={{
+                        filter: `
+                          brightness(${filters.brightness}%)
+                          contrast(${filters.contrast}%)
+                          saturate(${filters.saturate}%)
+                          blur(${filters.blur}px)
+                          sepia(${filters.sepia}%)
+                          grayscale(${filters.grayscale}%)
+                          hue-rotate(${filters.hueRotate}deg)
+                          invert(${filters.invert}%)
+                          opacity(${filters.opacity}%)
+                        `
+                      }}
+                    />
+                    
+                    <canvas 
+                        ref={maskCanvasRef}
+                        className={`absolute top-0 left-0 w-full h-full rounded-2xl pointer-events-none ${activeTab === 'inpainting' ? 'opacity-50' : 'opacity-0'}`}
+                        style={{ mixBlendMode: 'normal' }}
+                    />
+                </div>
                 
-                <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 bg-stone-900 border border-white/10 rounded-full px-4 py-1 flex items-center gap-4 shadow-xl">
+                <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 bg-stone-900/80 backdrop-blur-md border border-white/10 rounded-full px-4 py-1.5 flex items-center gap-4 shadow-xl z-10">
                    <div className="flex items-center gap-2 text-[10px] text-muted border-r border-white/10 pr-4">
                       <LayoutGrid size={12} />
-                      <span>{imageRef.current?.naturalWidth}x{imageRef.current?.naturalHeight} PX</span>
+                      <span>{imageRef.current?.naturalWidth || 0}x{imageRef.current?.naturalHeight || 0} PX</span>
                    </div>
                    <div className="flex items-center gap-2 text-[10px] text-primary">
                       <Check size={12} />
-                      <span>تم تطبيق التعديلات حياً</span>
+                      <span>{activeTab === 'inpainting' ? 'وضع الرسم مُفعل' : 'معاينة حية'}</span>
                    </div>
                 </div>
               </motion.div>

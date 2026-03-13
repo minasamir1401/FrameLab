@@ -70,13 +70,13 @@ const ImageGenerator = ({ prompt, setPrompt }) => {
   const [activeComposition, setActiveComposition] = useState('None');
 
   const models = [
-    { id: 'pollinations/flux', name: 'FLUX Unlimited 🔥', description: '100,000+ صورة يومياً | مجاني بالكامل وبدون أي قيود أو توقف' },
+    { id: 'pollinations/flux', name: 'FLUX Unlimited', description: '100,000+ صورة يومياً | مجاني بالكامل وبدون أي قيود أو توقف' },
     { id: 'cf/flux',        name: 'FLUX.1 Schnell',    description: '~ 60 صورة يومياً | دقيق وممتاز للسرعة العالية' },
     { id: 'cf/dreamshaper', name: 'DreamShaper 8',     description: '~ 120 صورة يومياً | الأفضل للوجوه والواقعية' },
     { id: 'cf/phoenix',     name: 'Phoenix 1.0',       description: '~ 25 صورة يومياً | جودة سينمائية خرافية وتفاصيل دقيقة' },
     { id: 'cf/sdxl',        name: 'SDXL 1.0',          description: '~ 25 صورة يومياً | تفصيل عالي للإبداع' },
     { id: 'cf/lucid',       name: 'Lucid Origin',      description: '~ 25 صورة يومياً | دقيق جداً في النصوص والتصاميم' },
-    { id: 'runware/z-image-turbo', name: 'Z-Image-Turbo', description: 'سيرفر خاص للملفات السريعة' },
+    { id: 'cf/lightning',   name: 'SDXL Lightning ',  description: 'فائق السرعة | توليد صور احترافية في ثوانٍ معدودة' },
   ];
 
 
@@ -107,13 +107,31 @@ const ImageGenerator = ({ prompt, setPrompt }) => {
     ]
   };
 
-  const downloadImage = (url) => {
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `framelab-ai-${Date.now()}.png`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const downloadImage = async (url) => {
+    try {
+      // Fetch the image as a blob to ensure proper downloading (especially for cross-origin URLs like Pollinations)
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = `framelab-ai-${Date.now()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Clean up the blob URL after a short delay
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+    } catch (e) {
+      console.warn("Download failed via fetch, falling back to direct link", e);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `framelab-ai-${Date.now()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
   
   const handleGenerate = async () => {

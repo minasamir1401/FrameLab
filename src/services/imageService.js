@@ -69,52 +69,53 @@ export const generateImage = async (prompt, options = {}) => {
   const colorStr = options.color ? `${options.color} color palette, ` : "";
   const compositionStr = options.composition ? `${options.composition} composition, ` : "";
 
-  const baseEnhancedPrompt = `${finalPrompt}, ${styleStr}${lightingStr}${colorStr}${compositionStr}cinematic 8k, highly detailed, sharp focus, masterpiece`;
+  const qualityKeywords = "ultra-photorealistic, raw photo, shot on 35mm lens, f/1.8, 8k uhd, highly detailed skin texture, cinematic atmosphere, natural lighting, professional photography, masterpiece, sharp focus, no anime, no cartoon, 4k, realistic";
+  const baseEnhancedPrompt = `${finalPrompt}, ${styleStr}${lightingStr}${colorStr}${compositionStr}${qualityKeywords}`;
 
   const count = options.count || 1;
 
   const generateSingleImage = async (index) => {
     // Slight variation to prompt to avoid exact caching when requesting multiple
-    const enhancedPrompt = count > 1 ? `${baseEnhancedPrompt} [v${index}-${Math.floor(Math.random() * 10000)}]` : baseEnhancedPrompt;
+    const enhancedPrompt = count > 1 ? `${baseEnhancedPrompt} (v${index}-${Math.floor(Math.random() * 10000)})` : baseEnhancedPrompt;
     const selectedModel = options.model || "pollinations/flux";
 
-    // -- FLUX ♾️ (HuggingFace FLUX.1-schnell via Worker Proxy - لا CORS!) --
+    // -- FLUX ♾️ (Pollinations أولاً → Cloudflare كـ Fallback) --
     if (selectedModel === "pollinations/flux") {
+      console.log(`🚀 FLUX ♾️ → Trying Pollinations... (Image ${index + 1})`);
+      // ✅ بدون seed (FLUX على Pollinations لا يدعمه)
+      const cleanPrompt = finalPrompt.slice(0, 150) + (count > 1 ? ` style ${index + 1}` : '');
+      const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt)}?width=1024&height=1024&model=flux&nologo=true`;
       try {
-        console.log(`🚀 FLUX ♾️ → Worker → HuggingFace FLUX.1-schnell... (Image ${index+1})`);
-        const response = await fetch(WORKER_API_URL, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${WORKER_TOKEN}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ prompt: enhancedPrompt })
-        });
-
-        if (response.ok) {
-          const blob = await response.blob();
-          if (blob.size > 1000) {
-            console.log(`✅ FLUX.1-schnell via Worker Success! (Image ${index+1})`);
+        const resp = await fetch(pollinationsUrl);
+        if (resp.ok) {
+          const blob = await resp.blob();
+          if (blob.size > 5000) {
+            console.log(`✅ FLUX Pollinations OK! size:${blob.size}`);
             return URL.createObjectURL(blob);
           }
-        } else {
-          const errText = await response.text();
-          console.warn("Worker FLUX failed:", errText);
         }
+        console.warn(`Pollinations responded ${resp.status}, falling back to Worker...`);
       } catch (e) {
-        console.warn("Worker FLUX error:", e.message);
+        console.warn(`Pollinations fetch failed: ${e.message}, falling back to Worker...`);
       }
-
-      // Fallback: Pollinations مباشرة (إذا فشل الـ Worker)
-      const seed = Math.floor(Math.random() * 1000000000);
-      console.log("⚠️ Falling back to Pollinations FLUX URL...");
-      return `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=1024&height=1024&seed=${seed}&model=flux&nologo=true`;
+      // 🔄 Fallback to Worker
+      console.log(`🔄 FLUX ♾️ → Cloudflare Worker Fallback...`);
+      const wResp = await fetch(WORKER_API_URL, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${WORKER_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: enhancedPrompt, model: "flux" })
+      });
+      if (wResp.ok) {
+        const blob = await wResp.blob();
+        if (blob.size > 1000) return URL.createObjectURL(blob);
+      }
+      throw new Error("FLUX generation failed on all providers");
     }
 
     // -- DALL-E 3 (Puter): يستخدم Puter SDK --
     if (selectedModel === "puter/dalle3") {
       try {
-        console.log(`Generating via Puter DALL-E 3... (Image ${index+1})`);
+        console.log(`Generating via Puter DALL-E 3... (Image ${index + 1})`);
         const imageElement = await window.puter.ai.txt2img(enhancedPrompt, {
           model: 'dall-e-3',
           testMode: false
@@ -141,7 +142,7 @@ export const generateImage = async (prompt, options = {}) => {
 
       for (const token of tokens) {
         try {
-          console.log(`Testing token ${token.slice(0, 10)}... for ${selectedModel} (Image ${index+1})`);
+          console.log(`Testing token ${token.slice(0, 10)}... for ${selectedModel} (Image ${index + 1})`);
           const response = await fetch(`${HF_ROUTER}/${selectedModel}`, {
             method: "POST",
             headers: {
@@ -161,7 +162,7 @@ export const generateImage = async (prompt, options = {}) => {
           if (response.ok) {
             const blob = await response.blob();
             if (blob.size > 1000) {
-              console.log(`Success with token on ${selectedModel}! (Image ${index+1})`);
+              console.log(`Success with token on ${selectedModel}! (Image ${index + 1})`);
               return URL.createObjectURL(blob);
             }
           }
@@ -175,11 +176,12 @@ export const generateImage = async (prompt, options = {}) => {
 
     // -- Cloudflare Worker Models (5 نماذج) --
     const cfModels = {
-      "cf/flux":        "flux",
-      "cf/phoenix":       "phoenix",
+      "cf/flux": "flux",
+      "cf/phoenix": "phoenix",
       "cf/dreamshaper": "dreamshaper",
-      "cf/sdxl":        "sdxl",
-      "cf/lucid":       "lucid",
+      "cf/sdxl": "lightning",
+      "cf/lucid": "phoenix",
+      "cf/lightning": "lightning",
     };
 
     // إعدادات مخصصة لكل موديل لأفضل جودة
@@ -195,26 +197,31 @@ export const generateImage = async (prompt, options = {}) => {
         guidance: 7.5,
       },
       "cf/dreamshaper": {
-        width: 768, height: 768,   
+        width: 768, height: 768,
         num_steps: 8,              // LCM Models لازم من 4 لـ 8 خطوات فقط! 20 بتعمل تشويش
         guidance: 1.5,             // 🔥 الأهم: موديلات LCM بتتشوه ألوانها لو guidance أكبر من 2!
       },
       "cf/sdxl": {
-        width: 1024, height: 1024, 
-        num_steps: 20,             
-        guidance: 7.5,             
+        width: 1024, height: 1024,
+        num_steps: 20,
+        guidance: 7.5,
       },
       "cf/lucid": {
         width: 1024, height: 1024,
         num_steps: 20,
         guidance: 7.5,
       },
+      "cf/lightning": {
+        width: 1024, height: 1024,
+        num_steps: 8,              // SDXL Lightning optimal steps
+        guidance: 1.0,             // Lower guidance usually better for Lightning
+      },
     };
 
     if (cfModels[selectedModel] !== undefined) {
       const params = cfModelParams[selectedModel] || { width: 512, height: 512, num_steps: 8, guidance: 7.5 };
       try {
-        console.log(`🚀 Cloudflare Worker [${selectedModel}] steps:${params.num_steps}... (Image ${index+1})`);
+        console.log(`🚀 Cloudflare Worker [${selectedModel}] steps:${params.num_steps}... (Image ${index + 1})`);
         const response = await fetch(WORKER_API_URL, {
           method: "POST",
           headers: {
@@ -222,19 +229,19 @@ export const generateImage = async (prompt, options = {}) => {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            prompt:    enhancedPrompt,
-            model:     cfModels[selectedModel],
-            width:     params.width,
-            height:    params.height,
+            prompt: enhancedPrompt,
+            model: cfModels[selectedModel],
+            width: params.width,
+            height: params.height,
             num_steps: params.num_steps,
-            guidance:  params.guidance,
+            guidance: params.guidance,
           })
         });
 
         if (response.ok) {
           const blob = await response.blob();
           if (blob.size > 1000) {
-            console.log(`✅ Cloudflare [${selectedModel}] Success! size:${blob.size} (Image ${index+1})`);
+            console.log(`✅ Cloudflare [${selectedModel}] Success! size:${blob.size} (Image ${index + 1})`);
             return URL.createObjectURL(blob);
           } else {
             console.warn(`Cloudflare returned tiny blob (${blob.size} bytes), retrying...`);
@@ -248,56 +255,10 @@ export const generateImage = async (prompt, options = {}) => {
       }
     }
 
-    // -- Z-Image-Turbo (deAPI) --
-    if (selectedModel === "runware/z-image-turbo") {
-      try {
-        console.log(`Generating via deAPI fallback... (Image ${index+1})`);
-        const requestPayload = {
-          prompt: enhancedPrompt,
-          model: "ZImageTurbo_INT8",
-          width: 1024,
-          height: 1024,
-          guidance: 3.5,
-          steps: 4,
-          seed: -1
-        };
-
-        const response = await fetch(`${DEAPI_BASE}/txt2img`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${DEAPI_KEY}`
-          },
-          body: JSON.stringify(requestPayload)
-        });
-
-        const startData = await response.json();
-        const requestId = startData.data?.request_id;
-        if (!requestId) throw new Error("No request_id returned from deAPI");
-
-        let attempts = 0;
-        while (attempts < 30) {
-          const statusResponse = await fetch(`${DEAPI_BASE}/request-status/${requestId}`, {
-            headers: { "Authorization": `Bearer ${DEAPI_KEY}` }
-          });
-          const statusData = await statusResponse.json();
-          const job = statusData.data;
-
-          if (job.status === "done") return job.result_url || job.result;
-          if (job.status === "error") throw new Error(`deAPI job failed: ${job.error}`);
-
-          attempts++;
-          await new Promise(r => setTimeout(r, 2000));
-        }
-        throw new Error("deAPI timeout");
-      } catch (err) {
-        console.warn(`Z-Turbo Engine failed: ${err.message}. Falling back...`);
-      }
-    }
 
     // -- Pollinations.ai (Reliable Engine as Fallback or Default) --
     try {
-      console.log(`Generating via Pollinations.ai engine fallback... (Image ${index+1})`);
+      console.log(`Generating via Pollinations.ai engine fallback... (Image ${index + 1})`);
 
       // Map standard model IDs to Pollinations engines
       let modelIdentifier = 'flux';
@@ -317,15 +278,15 @@ export const generateImage = async (prompt, options = {}) => {
 
   const promises = Array.from({ length: count }).map((_, i) => generateSingleImage(i));
   const results = await Promise.allSettled(promises);
-  
+
   const successfulUrls = results
     .filter(r => r.status === 'fulfilled' && r.value)
     .map(r => r.value);
-    
+
   if (successfulUrls.length === 0) {
     throw new Error("فشل توليد الصور. نعتذر عن هذا العطل المؤقت.");
   }
-  
+
   return successfulUrls;
 };
 

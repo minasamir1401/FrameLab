@@ -40,6 +40,7 @@ const Navbar = () => {
         
         <div className="hidden md:flex items-center gap-6 text-sm font-medium text-muted">
           <Link to="/studio" className="hover:text-primary transition-colors">{t('nav.studio')}</Link>
+          <Link to="/editor" className="hover:text-primary transition-colors">تعديل الصور (AI)</Link>
         </div>
       </div>
 
