@@ -69,7 +69,9 @@ export const generateImage = async (prompt, options = {}) => {
   const colorStr = options.color ? `${options.color} color palette, ` : "";
   const compositionStr = options.composition ? `${options.composition} composition, ` : "";
 
-  const qualityKeywords = "ultra-photorealistic, raw photo, shot on 35mm lens, f/1.8, 8k uhd, highly detailed skin texture, cinematic atmosphere, natural lighting, professional photography, masterpiece, sharp focus, no anime, no cartoon, 4k, realistic";
+  const qualityKeywords = options.isCreative 
+    ? "anime style, digital illustration, highly detailed, vibrant colors, artistic, masterpiece, sharp focus, 8k uhd, incredible lighting, concept art, cell shaded"
+    : "ultra-photorealistic, raw photo, shot on 35mm lens, f/1.8, 8k uhd, highly detailed skin texture, cinematic atmosphere, natural lighting, professional photography, masterpiece, sharp focus, no anime, no cartoon, 4k, realistic";
   const baseEnhancedPrompt = `${finalPrompt}, ${styleStr}${lightingStr}${colorStr}${compositionStr}${qualityKeywords}`;
 
   const count = options.count || 1;
@@ -103,7 +105,11 @@ export const generateImage = async (prompt, options = {}) => {
       const wResp = await fetch(WORKER_API_URL, {
         method: "POST",
         headers: { "Authorization": `Bearer ${WORKER_TOKEN}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: enhancedPrompt, model: "flux" })
+        body: JSON.stringify({ 
+          prompt: enhancedPrompt, 
+          model: "flux",
+          isCreative: options.isCreative 
+        })
       });
       if (wResp.ok) {
         const blob = await wResp.blob();
@@ -235,6 +241,7 @@ export const generateImage = async (prompt, options = {}) => {
             height: params.height,
             num_steps: params.num_steps,
             guidance: params.guidance,
+            isCreative: options.isCreative
           })
         });
 

@@ -68,6 +68,7 @@ const ImageGenerator = ({ prompt, setPrompt }) => {
   const [activeLighting, setActiveLighting] = useState('None');
   const [activeColor, setActiveColor] = useState('None');
   const [activeComposition, setActiveComposition] = useState('None');
+  const [isCreative, setIsCreative] = useState(false);
 
   const models = [
     { id: 'pollinations/flux', name: 'FLUX Unlimited', description: '100,000+ صورة يومياً | مجاني بالكامل وبدون أي قيود أو توقف' },
@@ -150,7 +151,8 @@ const ImageGenerator = ({ prompt, setPrompt }) => {
         lighting: activeLighting !== 'None' ? activeLighting : null,
         color: activeColor !== 'None' ? activeColor : null,
         composition: activeComposition !== 'None' ? activeComposition : null,
-        count: imageCount
+        count: imageCount,
+        isCreative: isCreative
       });
 
       setResultImage(imageUrl);
@@ -210,6 +212,17 @@ const ImageGenerator = ({ prompt, setPrompt }) => {
                  className="p-2 hover:bg-white/10 rounded-lg text-muted transition-all"
                >
                   <RotateCcw size={20} />
+               </button>
+               
+               <button 
+                 onClick={() => setIsCreative(!isCreative)}
+                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all ${isCreative ? 'bg-purple-500/20 border-purple-500/40 text-purple-400' : 'bg-white/5 border-white/10 text-muted hover:bg-white/10'}`}
+                 title="تفعيل وضع الإبداع (أنمي، فن رقمي، رسم)"
+               >
+                 <Sparkles size={16} className={isCreative ? 'animate-pulse' : ''} />
+                 <span className="text-[10px] sm:text-xs font-bold whitespace-nowrap">
+                   {isCreative ? 'وضع الإبداع: مشغل' : 'وضع الإبداع: مغلق'}
+                 </span>
                </button>
             </div>
           </div>
