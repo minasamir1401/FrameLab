@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Sparkles, 
   ChevronDown,
@@ -7,10 +7,13 @@ import {
   RotateCcw,
   Plus,
   Download,
-  History
+  History,
+  ArrowRight
 } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import { generateImage } from '../services/imageService';
 import { saveToStudio, blobToBase64 } from '../services/storageService';
 
@@ -56,12 +59,14 @@ const Hero = () => {
 
 const ImageGenerator = ({ prompt, setPrompt }) => {
   const { t, i18n } = useTranslation();
+  const { user } = useAuth();
   const [aspectRatio, setAspectRatio] = useState('1:1');
   const [loading, setLoading] = useState(false);
   const [resultImage, setResultImage] = useState(null);
   const [error, setError] = useState(null);
   const [selectedModel, setSelectedModel] = useState('cf/flux');
   const [imageCount, setImageCount] = useState(1);
+  const [showLimitModal, setShowLimitModal] = useState(false);
   
   // Style States
   const [activeStyle, setActiveStyle] = useState('None');
@@ -138,6 +143,16 @@ const ImageGenerator = ({ prompt, setPrompt }) => {
   const handleGenerate = async () => {
     if (!prompt.trim()) return;
     
+    // Guest limit check
+    let guestCount = 0;
+    if (!user) {
+      guestCount = parseInt(localStorage.getItem('guest_gen_count') || '0', 10);
+      if (guestCount >= 20) {
+        setShowLimitModal(true);
+        return;
+      }
+    }
+
     setLoading(true);
     setError(null);
     setResultImage(null);
@@ -167,6 +182,12 @@ const ImageGenerator = ({ prompt, setPrompt }) => {
             model: selectedModel
           });
         }
+
+        // Increment guest limit
+        if (!user && imageUrl && imageUrl.length > 0) {
+          localStorage.setItem('guest_gen_count', (guestCount + imageUrl.length).toString());
+        }
+
       } catch (saveErr) {
         console.warn("Failed to save to history:", saveErr);
       }
@@ -400,6 +421,54 @@ const ImageGenerator = ({ prompt, setPrompt }) => {
              </div>
           </div>
         </div>
+
+        {/* Limit Modal */}
+        <AnimatePresence>
+          {showLimitModal && (
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+              <motion.div 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                exit={{ opacity: 0 }} 
+                className="absolute inset-0 bg-black/80 backdrop-blur-md"
+                onClick={() => setShowLimitModal(false)}
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className="relative bg-stone-900 border border-white/10 p-8 rounded-3xl shadow-2xl max-w-md w-full text-center overflow-hidden z-10"
+              >
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary via-orange-500 to-primary" />
+                <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-primary/20 shadow-xl shadow-primary/10">
+                  <Sparkles className="text-primary w-10 h-10 animate-pulse" />
+                </div>
+                <h3 className="text-2xl font-bold text-white mb-3 tracking-tight">لقد تجاوزت الحد المجاني 🚀</h3>
+                <p className="text-stone-300 text-lg mb-8 leading-relaxed">
+                  لقد استمتعت بتوليد <span className="text-primary font-bold">20 صورة</span> مجانية. 
+                  <br className="mb-2" />
+                  قم بتسجيل الدخول الآن لتتمكن من إنشاء صور غير محدودة وبميزات إضافية حصرية!
+                </p>
+                <div className="flex flex-col gap-3">
+                  <Link 
+                    to="/login"
+                    onClick={() => setShowLimitModal(false)}
+                    className="w-full primary-button py-4 text-lg font-bold flex items-center justify-center gap-3 transition-transform hover:scale-[1.02]"
+                  >
+                    تسجيل الدخول / إنشاء حساب
+                    <ArrowRight className="w-5 h-5 mx-1" />
+                  </Link>
+                  <button 
+                    onClick={() => setShowLimitModal(false)}
+                    className="w-full text-stone-400 py-3 hover:text-white hover:bg-white/5 transition-all font-medium rounded-xl"
+                  >
+                   العودة
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
     </section>
   );

@@ -21,14 +21,19 @@ const WORKER_TOKEN = "12345678";
 const DEAPI_KEY = "7423|Z1ZDwENmLfaKAu1NPAWdeQzrjRzEUlgXpbVQXFsy1227c8ac";
 const DEAPI_BASE = "https://api.deapi.ai/api/v1/client";
 
-// ترتب التوكنات بحيث يتغير التوكن الأساسي تلقائياً كل ساعة
-export const getHourlySortedTokens = () => {
-  const currentHour = Math.floor(Date.now() / (1000 * 60 * 60));
-  const startIndex = currentHour % HF_TOKENS.length;
-  return [...HF_TOKENS.slice(startIndex), ...HF_TOKENS.slice(0, startIndex)];
+// ترتب التوكنات بحيث يتغير التوكن الأساسي تلقائياً مع كل طلب
+let currentTokenIndex = 0;
+export const getActiveToken = () => {
+  if (HF_TOKENS.length === 0) return null;
+  const token = HF_TOKENS[currentTokenIndex];
+  currentTokenIndex = (currentTokenIndex + 1) % HF_TOKENS.length;
+  return token;
 };
 
-export const getActiveToken = () => getHourlySortedTokens()[0];
+export const getHourlySortedTokens = () => {
+  // Keeping this for compatibility, but it will return the same as getActiveToken in sequence
+  return [getActiveToken(), ...HF_TOKENS.filter(t => t !== getActiveToken())];
+};
 
 /**
  * ترجمة النصوص العربية إلى الإنجليزية
@@ -199,7 +204,7 @@ export const generateImage = async (prompt, options = {}) => {
       },
       "cf/phoenix": {
         width: 1024, height: 1024, // Phoenix 1.0 عبقري في التفاصيل الدقيقة والواقعية
-        num_steps: 20,             // يحتاج 20 خطوة كاملة (مثل SDXL)
+        num_steps: 19,             // Reduced to 19 to avoid boundary issues (limit is <= 20)
         guidance: 7.5,
       },
       "cf/dreamshaper": {
@@ -209,12 +214,12 @@ export const generateImage = async (prompt, options = {}) => {
       },
       "cf/sdxl": {
         width: 1024, height: 1024,
-        num_steps: 20,
+        num_steps: 19,
         guidance: 7.5,
       },
       "cf/lucid": {
         width: 1024, height: 1024,
-        num_steps: 20,
+        num_steps: 19,
         guidance: 7.5,
       },
       "cf/lightning": {
@@ -461,12 +466,19 @@ export const animateImage = async (imageFile, prompt, duration) => {
   try {
     // Convert file to base64 for SiliconFlow if needed, or handle differently
     // For now, if it's a file, we wrap it
-    const base64Image = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(imageFile);
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-    });
+    let base64Image;
+    if (typeof imageFile === 'string' && imageFile.startsWith('data:')) {
+      base64Image = imageFile;
+    } else if (imageFile instanceof Blob || imageFile instanceof File) {
+      base64Image = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(imageFile);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+      });
+    } else {
+      base64Image = imageFile; // Assume it's a URL
+    }
 
     return await animateImageSilicon(base64Image, prompt);
   } catch (err) {
@@ -474,12 +486,20 @@ export const animateImage = async (imageFile, prompt, duration) => {
     const isArabic = /[\u0600-\u06FF]/.test(prompt);
     const finalPrompt = (isArabic && prompt.trim()) ? await translateToEnglish(prompt) : prompt;
 
-    const base64Raw = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(imageFile);
-      reader.onload = () => resolve(reader.result.split(',')[1]);
-      reader.onerror = reject;
-    });
+    let base64Raw;
+    if (typeof imageFile === 'string' && imageFile.startsWith('data:')) {
+       base64Raw = imageFile.split(',')[1];
+    } else if (imageFile instanceof Blob || imageFile instanceof File) {
+      base64Raw = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(imageFile);
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+      });
+    } else {
+       // If it's a URL, we'd need to fetch it first, but usually we deal with local files here
+       throw new Error("Local file or base64 required for fallback animation");
+    }
 
     const HF_ROUTER = "https://router.huggingface.co/hf-inference/models";
     const response = await fetch(`${HF_ROUTER}/r3gm/wan2-2-fp8da-aoti-preview`, {
@@ -496,5 +516,78 @@ export const animateImage = async (imageFile, prompt, duration) => {
     });
     const blob = await response.blob();
     return URL.createObjectURL(blob);
+  }
+};
+
+/**
+ * Omni Image Editor (Hugging Face)
+ * Supports: edit, upscale, watermark removal
+ */
+export const editImageOmni = async (imageInput, prompt, task = 'edit') => {
+  try {
+    console.log(`🎨 Omni Editor Task: ${task}...`);
+    
+    // Use active token if available
+    const token = getActiveToken();
+    const connectOptions = token ? { hf_token: token } : {};
+    
+    const client = await Client.connect("selfit-camera/Omni-Image-Editor", connectOptions);
+
+    const finalPrompt = await translateToEnglish(prompt || "");
+
+    let imageBlob;
+    if (typeof imageInput === 'string' && imageInput.startsWith('data:')) {
+      // Manual conversion to avoid "Failed to fetch" on data URLs in some browsers
+      const arr = imageInput.split(',');
+      const mime = arr[0].match(/:(.*?);/)[1];
+      const bstr = atob(arr[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while(n--){
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      imageBlob = new Blob([u8arr], {type:mime});
+    } else if (typeof imageInput === 'string') {
+      // If it's a URL, we must fetch it
+      const resp = await fetch(imageInput);
+      if (!resp.ok) throw new Error(`Failed to fetch image from URL: ${resp.status}`);
+      imageBlob = await resp.blob();
+    } else {
+      imageBlob = imageInput;
+    }
+
+    let endpoint = "/edit_image_interface";
+    let params = { input_image: imageBlob, prompt: finalPrompt };
+
+    if (task === 'upscale') {
+      endpoint = "/image_upscale_interface";
+      params = { input_image: imageBlob };
+    } else if (task === 'remove_watermark') {
+      endpoint = "/watermark_removal_interface";
+      params = { input_image: imageBlob, force_removal: true };
+    }
+
+    console.log(`🚀 Omni Editor: Predicting ${endpoint}...`);
+    const result = await client.predict(endpoint, params);
+
+    if (result.data && result.data[0]) {
+      const htmlString = result.data[0];
+      const match = htmlString.match(/src='([^']*)'/);
+      if (match && match[1]) {
+        let finalUrl = match[1];
+        
+        // Fix CORS: If the result is from omnicreator.net, it often blocks direct fetch/display
+        // We can try to use it directly in <img> tags (which usually works), 
+        // but if we need to fetch it (like for some filters), we might need a proxy.
+        // For display only, the URL should be enough.
+        return finalUrl;
+      }
+      throw new Error("لم نتمكن من العثور على رابط الصورة في رد الخادم.");
+    }
+    throw new Error("السيرفر لم يرجع أي بيانات. قد تكون المساحة (Space) متوقفة حالياً.");
+  } catch (err) {
+    console.error("Omni Editor Error details:", err);
+    // If we have a data URL but no fetch, it might be a connectivity issue with the Gradio client
+    throw err;
   }
 };

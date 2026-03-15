@@ -1,8 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Upload, Sparkles, Loader2, ArrowLeft, Image as ImageIcon, Download, Scissors, Check, Eraser } from 'lucide-react';
-import { Client } from "@gradio/client";
-import { HF_TOKENS } from '../services/imageService';
+import { editImageOmni } from '../services/imageService';
 
 const WatermarkRemover = () => {
   const [image, setImage] = useState(null);
@@ -54,50 +53,51 @@ const WatermarkRemover = () => {
     }
   };
 
+  /**
+   * Helper to load an external image via Proxy to bypass CORS
+   */
+  const proxyImageToLocal = async (url) => {
+    if (!url || url.startsWith('blob:') || url.startsWith('data:')) return url;
+    
+    const proxies = [
+      (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+      (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+      (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+    ];
+
+    for (const proxyFn of proxies) {
+      try {
+        const pUrl = proxyFn(url);
+        const response = await fetch(pUrl);
+        if (response.ok) {
+          const blob = await response.blob();
+          return URL.createObjectURL(blob);
+        }
+      } catch (e) {
+        console.warn(`Proxy failed in WatermarkRemover:`, e.message);
+      }
+    }
+    return url;
+  };
+
   const removeWatermark = async () => {
     if (!image) return;
     setLoading(true);
     setError(null);
 
     try {
-      const compressedImage = await compressAndResizeImage(image);
+      // 1. تصغير الصورة قبل الإرسال لمنع أخطاء الشبكة والـ CORS
+      const compressedImage = await compressAndResizeImage(image, 1024);
       
-      const tokens = HF_TOKENS;
+      // 2. المحاولة باستخدام Omni
+      const resultUrl = await editImageOmni(compressedImage, "", 'remove_watermark');
       
-      let success = false;
-      let resultUrl = null;
-
-      for (const token of tokens) {
-        if (success) break;
-        try {
-          const app = await Client.connect("prithivMLmods/Kontext-Watermark-Remover", { hf_token: token });
-          
-          const imageResponse = await fetch(compressedImage);
-          const imageBlob = await imageResponse.blob();
-
-          // الدالة /predict في هذا الموديل تأخذ عادةً الصورة كمدخل
-          const result = await app.predict("/predict", [
-            imageBlob, 
-          ]);
-
-          if (result && result.data && result.data[0]) {
-            const outImg = result.data[0];
-            resultUrl = outImg?.url || outImg;
-            success = true;
-          }
-        } catch (e) {
-          console.warn("HF Token failed for watermark...", e.message);
-        }
-      }
-
-      if (success && resultUrl) {
-        setProcessedImage(resultUrl);
-      } else {
-        throw new Error("السيرفرات مزدحمة حالياً أو هناك خطأ في الاتصال، حاول مرة أخرى.");
-      }
-
+      // 3. تجاوز CORS لعرض النتيجة
+      const localUrl = await proxyImageToLocal(resultUrl);
+      setProcessedImage(localUrl);
     } catch (err) {
-      setError(err.message || "فشلت عملية إزالة العلامة المائية");
+      console.error("Watermark removal failed:", err);
+      setError(err.message || "فشلت عملية إزالة العلامة المائية. قد تكون الخدمة مضغوطة حالياً.");
     } finally {
       setLoading(false);
     }
@@ -192,6 +192,7 @@ const WatermarkRemover = () => {
                             <img 
                               src={processedImage} 
                               alt="Cleaned" 
+                              crossOrigin={processedImage.startsWith('blob:') || processedImage.startsWith('data:') ? undefined : "anonymous"}
                               className="w-full h-full object-contain"
                             />
                              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 text-xs bg-green-500/20 text-green-400 px-3 py-1.5 rounded-full border border-green-500/30 backdrop-blur-md">

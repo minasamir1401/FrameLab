@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { Client } from '@gradio/client';
-import { getHourlySortedTokens } from '../services/imageService';
+import { getHourlySortedTokens, editImageOmni } from '../services/imageService';
 import { 
   Upload, 
   Download, 
@@ -113,38 +113,99 @@ const Editor = () => {
       if (activeTab === 'inpainting') {
         if (!aiPrompt.trim()) throw new Error("يرجى وصف التعديل المطلوب (مثلاً: إضافة قبعة، تغيير الخلفية)");
         
-        // 1. استخراج الماسك من الكانفاس (PNG أفضل للماسك ليكون حاداً)
-        const maskData = maskCanvasRef.current.toDataURL('image/png');
-        
-        // 2. تصغير الصورة الأصلية لـ 512x512 (شرط أساسي لـ Inpainting)
-        const optimizedImage = await compressAndResizeImage(image, 512);
+        // Use mask if it has content, otherwise use global Omni edit
+        const canvas = maskCanvasRef.current;
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        const hasMask = Array.from(imageData).some((val, i) => (i + 1) % 4 === 0 && val > 0);
 
-        // 3. إرسال للووركر
-        const response = await fetch("https://image-api.mina15g4y.workers.dev", {
-          method: "POST",
-          headers: {
-            "Authorization": "Bearer 12345678",
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: "inpainting",
-            prompt: aiPrompt,
-            image: optimizedImage,
-            mask: maskData
-          })
-        });
+        if (hasMask) {
+          // Cloudflare Inpainting Fallback or specific logic
+          // (Keeping original Cloudflare logic for mask-based inpainting for now)
+          const maskData = canvas.toDataURL('image/png');
+          const optimizedImage = await compressAndResizeImage(image, 512);
 
-        if (!response.ok) {
-          const errData = await response.json();
-          throw new Error(errData.error || "فشل السيرفر في معالجة طلب التعديل");
+          const response = await fetch("https://image-api.mina15g4y.workers.dev", {
+            method: "POST",
+            headers: {
+              "Authorization": "Bearer 12345678",
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              model: "inpainting",
+              prompt: aiPrompt,
+              image: optimizedImage,
+              mask: maskData
+            })
+          });
+
+          if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || "فشل السيرفر في معالجة طلب التعديل");
+          }
+          
+          const blob = await response.blob();
+          setImage(URL.createObjectURL(blob));
+          clearMask();
+        } else {
+          // Global edit using Omni
+          const resultUrl = await editImageOmni(image, aiPrompt, 'edit');
+          const localUrl = await proxyImageToLocal(resultUrl);
+          setImage(localUrl);
         }
-        
-        const blob = await response.blob();
-        setImage(URL.createObjectURL(blob));
-        clearMask();
       }
     } catch (err) {
+      console.error("AI Edit failure:", err);
       setAiError(err.message || "حدث خطأ");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  /**
+   * Helper to load an external image into a local DataURL/Blob to bypass CORS
+   */
+  const proxyImageToLocal = async (url) => {
+    if (!url) return url;
+    if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+
+    const proxies = [
+      (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+      (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+      (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+    ];
+
+    for (const proxyFn of proxies) {
+      try {
+        const pUrl = proxyFn(url);
+        console.log(`🔄 Trying proxy: ${pUrl}`);
+        const response = await fetch(pUrl);
+        if (response.ok) {
+          const blob = await response.blob();
+          return URL.createObjectURL(blob);
+        }
+      } catch (e) {
+        console.warn(`Proxy failed:`, e.message);
+      }
+    }
+
+    console.error("❌ All proxies failed for:", url);
+    return url; // Fallback to original URL
+  };
+
+  const handleOmniTask = async (task) => {
+    if (!image) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const resultUrl = await editImageOmni(image, "", task);
+      const localUrl = await proxyImageToLocal(resultUrl);
+      setImage(localUrl);
+    } catch (err) {
+      console.error("Omni task error:", err);
+      setAiError(err.message || "فشلت المحاولة");
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -377,8 +438,28 @@ const Editor = () => {
                       className="w-full primary-button py-3 text-xs flex items-center justify-center gap-2"
                     >
                       {aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles size={14} />}
-                      {aiLoading ? "جاري التعديل..." : "تطبيق الرسم الذكي"}
+                      {aiLoading ? "جاري التعديل..." : "تطبيق الذكاء الاصطناعي (Omni)"}
                     </button>
+
+                    <div className="grid grid-cols-2 gap-2 pt-2">
+                       <button 
+                          onClick={() => handleOmniTask('upscale')}
+                          disabled={aiLoading}
+                          className="py-2 text-[10px] bg-white/5 border border-white/10 rounded-lg text-white hover:bg-white/10 flex items-center justify-center gap-1"
+                       >
+                          <Layers size={12} />
+                          تحسين الجودة
+                       </button>
+                       <button 
+                          onClick={() => handleOmniTask('remove_watermark')}
+                          disabled={aiLoading}
+                          className="py-2 text-[10px] bg-white/5 border border-white/10 rounded-lg text-white hover:bg-white/10 flex items-center justify-center gap-1"
+                       >
+                          <Scissors size={12} />
+                          إزالة العلامة
+                       </button>
+                    </div>
+
                     {aiError && <p className="text-[10px] text-red-500 text-right">{aiError}</p>}
                   </div>
                 )}
@@ -466,6 +547,7 @@ const Editor = () => {
                       ref={imageRef}
                       src={image} 
                       onLoad={handleImageLoad}
+                      crossOrigin={image.startsWith('blob:') || image.startsWith('data:') ? undefined : "anonymous"}
                       alt="Edit target"
                       className="max-w-full max-h-[70vh] rounded-2xl shadow-2xl transition-all duration-200 select-none pointer-events-none"
                       style={{

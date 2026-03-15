@@ -11,6 +11,7 @@
   --font-sans: "Inter", "IBM Plex Sans Arabic", sans-serif;
   --font-serif: "Playfair Display", "Cormorant Garamond", serif;
   --breakpoint-xs: 400px;
+  --breakpoint-xxs: 320px;
 }
 
 :root {
